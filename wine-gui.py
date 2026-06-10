@@ -20,8 +20,10 @@ class WineLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("WINE Vibe Launcher")
-        self.geometry("680x850")
-        self.resizable(False, False)
+        self.geometry("720x850")
+        
+        self.resizable(True, True)
+        self.minsize(550, 600)
 
         self.app_dir = os.path.expanduser("~/.local/share/vibe-launcher")
         self.runners_dir = os.path.join(self.app_dir, "runners")
@@ -39,13 +41,20 @@ class WineLauncher(ctk.CTk):
         if os.path.exists(old_config) and not os.path.exists(self.config_file):
             shutil.copy(old_config, self.config_file)
 
+        self.config_data = self.load_config_data()
+        self.games = self.config_data.get("games", [])
+        
+        # ЗАШИТО НАМЕРТВО: Твой личный API Ключ для SteamGridDB
+        self.sgdb_key = "ee39063db1c8b61b1639601ebe95185d"
+
         self.create_desktop_shortcut()
 
-        self.games = self.load_games()
         self.search_query = ""
         self.selected_game = None
         self.game_cards = []
         self.is_editing = False
+        
+        self.view_mode = "normal" 
 
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.pack(fill="both", expand=True)
@@ -59,6 +68,8 @@ class WineLauncher(ctk.CTk):
         self.init_settings_screen()
 
         self.show_screen(self.main_screen)
+        
+        self.bind("<Configure>", self.on_window_resize)
 
     def create_desktop_shortcut(self):
         apps_dir = os.path.expanduser("~/.local/share/applications")
@@ -108,14 +119,22 @@ StartupNotify=true
         self.settings_btn = ctk.CTkButton(self.top_box, text="⚙️ Настройки", width=110, fg_color="#333", hover_color="#444", command=lambda: self.show_screen(self.settings_screen))
         self.settings_btn.pack(side="right", padx=(5, 0))
 
-        self.search_entry = ctk.CTkEntry(self.main_screen, placeholder_text="Поиск в библиотеке...")
-        self.search_entry.pack(pady=(0, 10), fill="x")
+        self.search_view_box = ctk.CTkFrame(self.main_screen, fg_color="transparent")
+        self.search_view_box.pack(pady=(0, 10), fill="x")
+
+        self.search_entry = ctk.CTkEntry(self.search_view_box, placeholder_text="Поиск в библиотеке...")
+        self.search_entry.pack(side="left", expand=True, fill="x", padx=(0, 10))
         self.search_entry.bind("<KeyRelease>", self.filter_games)
+
+        self.size_normal_btn = ctk.CTkButton(self.search_view_box, text="■ Крупные", width=80, height=28, fg_color="#1f538d", command=lambda: self.set_view_mode("normal"))
+        self.size_normal_btn.pack(side="right", padx=2)
+        
+        self.size_small_btn = ctk.CTkButton(self.search_view_box, text="⁝⁝ Мелкие", width=80, height=28, fg_color="#333", hover_color="#444", command=lambda: self.set_view_mode("small"))
+        self.size_small_btn.pack(side="right", padx=2)
 
         self.scroll_frame = ctk.CTkScrollableFrame(self.main_screen, label_text="ВАША ИГРОВАЯ БИБЛИОТЕКА", label_font=("Arial", 11, "bold"))
         self.scroll_frame.pack(fill="both", expand=True, pady=5)
 
-        # Нижняя информационная панель (сделали высоту 165, чтобы точно всё влезло)
         self.info_panel = ctk.CTkFrame(self.main_screen, fg_color="#1e1e1e", border_width=1, border_color="#333", height=165)
         self.info_panel.pack(fill="x", pady=10)
         self.info_panel.pack_propagate(False)
@@ -123,7 +142,6 @@ StartupNotify=true
         self.info_label = ctk.CTkLabel(self.info_panel, text="Выберите игру из библиотеки выше", justify="left", font=("Arial", 13), text_color="gray", anchor="nw")
         self.info_label.pack(side="left", fill="both", expand=True, padx=15, pady=12)
 
-        # Правая панель кнопок в info_panel
         self.tools_frame = ctk.CTkFrame(self.info_panel, fg_color="transparent", width=130)
         self.tools_frame.pack(side="right", fill="y", padx=10, pady=10)
         
@@ -148,6 +166,22 @@ StartupNotify=true
         self.run_btn.pack(side="right", fill="x", expand=True, padx=(5, 0))
 
         self.update_list()
+
+    def set_view_mode(self, mode):
+        self.view_mode = mode
+        if mode == "normal":
+            self.size_normal_btn.configure(fg_color="#1f538d")
+            self.size_small_btn.configure(fg_color="#333")
+        else:
+            self.size_normal_btn.configure(fg_color="#333")
+            self.size_small_btn.configure(fg_color="#1f538d")
+        self.update_list()
+
+    def on_window_resize(self, event):
+        if hasattr(self, 'scroll_frame') and event.widget == self:
+            if not hasattr(self, '_resize_timer') or not self._resize_timer.is_alive():
+                self._resize_timer = threading.Timer(0.2, self.update_list)
+                self._resize_timer.start()
 
     def open_add_new(self):
         self.is_editing = False
@@ -339,34 +373,55 @@ StartupNotify=true
         else:
             self.games.append(new_data)
             
-        self.save_games(); self.update_list(); self.cancel_add()
+        self.save_config(); self.update_list(); self.cancel_add()
 
     def delete_game(self):
         if self.selected_game: 
             self.games.remove(self.selected_game)
             self.selected_game = None
             self.info_label.configure(text="Выберите игру из библиотеки выше", text_color="gray")
-            self.save_games(); self.update_list()
+            self.save_config(); self.update_list()
 
-    def load_games(self):
+    def load_config_data(self):
         if os.path.exists(self.config_file):
             try:
-                with open(self.config_file, "r") as f: return json.load(f).get("games", [])
+                with open(self.config_file, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict): return data
             except: pass
-        return []
+        return {"games": [], "sgdb_key": ""}
 
-    def save_games(self):
-        with open(self.config_file, "w") as f: json.dump({"games": self.games}, f, indent=4)
+    def save_config(self):
+        self.config_data["games"] = self.games
+        self.config_data["sgdb_key"] = self.sgdb_key
+        with open(self.config_file, "w") as f: json.dump(self.config_data, f, indent=4)
 
     def update_list(self):
-        for w in self.scroll_frame.winfo_children(): w.destroy()
+        for w in self.scroll_frame.winfo_children(): 
+            w.destroy()
         self.game_cards = []
+        
+        if self.view_mode == "normal":
+            card_w, card_h = 155, 245
+            img_w, img_h = 153, 205
+            pady_text = 20
+        else:
+            card_w, card_h = 105, 175
+            img_w, img_h = 103, 140
+            pady_text = 10
+
+        self.update_idletasks()
+        frame_width = self.scroll_frame.winfo_width() - 30
+        if frame_width < 100: 
+            frame_width = 650
+            
+        max_cols = max(1, frame_width // (card_w + 12))
         
         row, col = 0, 0
         for g in self.games:
             if self.search_query.lower() in g["name"].lower():
-                card = ctk.CTkFrame(self.scroll_frame, width=140, height=190, fg_color="#1a1a1a", border_width=1, border_color="#333", corner_radius=8)
-                card.grid(row=row, column=col, padx=10, pady=10)
+                card = ctk.CTkFrame(self.scroll_frame, width=card_w, height=card_h, fg_color="#1a1a1a", border_width=1, border_color="#333", corner_radius=8)
+                card.grid(row=row, column=col, padx=6, pady=8)
                 card.grid_propagate(False)
 
                 img_path = g.get("icon_path", "")
@@ -374,27 +429,33 @@ StartupNotify=true
                 
                 if img_path and os.path.exists(img_path):
                     try:
-                        pil_img = Image.open(img_path).resize((138, 145), Image.Resampling.LANCZOS)
-                        ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(138, 145))
+                        # ИСПРАВЛЕНО: Принудительно открываем файл заново, игнорируя кэш Tkinter/Pillow
+                        with Image.open(img_path) as open_img:
+                            pil_img = open_img.copy().resize((img_w, img_h), Image.Resampling.LANCZOS)
+                        ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(img_w, img_h))
                         lbl_img = ctk.CTkLabel(card, image=ctk_img, text="")
                         lbl_img.pack(side="top", fill="both", expand=True)
                         has_img = True
-                    except: pass
+                    except Exception as e:
+                        print(f"Ошибка вывода картинки: {e}")
 
                 if not has_img:
-                    lbl_img = ctk.CTkLabel(card, text=g['name'][:12] + '...' if len(g['name']) > 12 else g['name'], font=("Arial", 12, "bold"), text_color="#1f538d", anchor="center")
-                    lbl_img.pack(side="top", fill="both", expand=True, pady=20)
+                    lbl_img = ctk.CTkLabel(card, text=g['name'][:10] + '...' if len(g['name']) > 10 else g['name'], font=("Arial", 11, "bold"), text_color="#1f538d", anchor="center")
+                    lbl_img.pack(side="top", fill="both", expand=True, pady=pady_text)
 
-                lbl_name = ctk.CTkLabel(card, text=g['name'], font=("Arial", 11, "bold"), anchor="w", padx=5)
+                lbl_name = ctk.CTkLabel(card, text=g['name'], font=("Arial", 10, "bold") if self.view_mode=="small" else ("Arial", 11, "bold"), anchor="w", padx=6)
                 lbl_name.pack(side="bottom", fill="x", pady=(2, 5))
 
                 for widget in [card, lbl_img, lbl_name]:
                     widget.bind("<Button-1>", lambda e, game=g: self.select_game(game))
                 
+                if self.selected_game and g["name"] == self.selected_game["name"]:
+                    card.configure(border_color="#1f538d", fg_color="#222")
+                
                 self.game_cards.append((g, card))
                 
                 col += 1
-                if col > 3:
+                if col >= max_cols:
                     col = 0
                     row += 1
 
@@ -404,8 +465,9 @@ StartupNotify=true
 
     def select_game(self, game):
         self.selected_game = game
+        
         for g, card in self.game_cards:
-            if g == game:
+            if g["name"] == game["name"]:
                 card.configure(border_color="#1f538d", fg_color="#222")
             else:
                 card.configure(border_color="#333", fg_color="#1a1a1a")
@@ -424,41 +486,140 @@ StartupNotify=true
         if not self.selected_game:
             self.info_label.configure(text="⚠️ Сначала выберите игру для скачивания обложки!", text_color="#ff4444")
             return
-            
+
         game = self.selected_game
         game_name = game["name"]
         
-        self.info_label.configure(text=f"🔍 Ищем обложку для '{game_name}' в Steam...", text_color="cyan")
+        self.info_label.configure(text=f"🔍 Ищем варианты обложек для '{game_name}' на SteamGridDB...", text_color="cyan")
         
         def worker():
             try:
-                search_url = f"https://store.steampowered.com/api/storesearch/?term={urllib.parse.quote(game_name)}&l=russian&cc=RU"
-                req = urllib.request.Request(search_url, headers={"User-Agent": "VibeLauncher"})
+                encoded_name = urllib.parse.quote(game_name.strip())
+                search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{encoded_name}"
+                
+                req = urllib.request.Request(search_url, headers={
+                    "Authorization": f"Bearer {self.sgdb_key.strip()}",
+                    "User-Agent": "VibeLauncher"
+                })
                 
                 with urllib.request.urlopen(req) as resp:
-                    data = json.loads(resp.read().decode())
+                    res_data = json.loads(resp.read().decode())
+                
+                if res_data and res_data.get("success") and res_data.get("data") and len(res_data["data"]) > 0:
+                    sgdb_game_id = res_data["data"][0]["id"]
+                    found_name = res_data["data"][0]["name"]
                     
-                if data and data.get("total") > 0:
-                    best_match = data["items"][0]
-                    steam_id = best_match["id"]
+                    grids_url = f"https://www.steamgriddb.com/api/v2/grids/game/{sgdb_game_id}"
                     
-                    cover_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{steam_id}/library_600x900.jpg"
+                    req_grids = urllib.request.Request(grids_url, headers={
+                        "Authorization": f"Bearer {self.sgdb_key.strip()}",
+                        "User-Agent": "VibeLauncher"
+                    })
                     
-                    clean_name = "".join([c for c in game_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-                    save_path = os.path.join(self.covers_dir, f"{clean_name}_{steam_id}.jpg")
-                    
-                    urllib.request.urlretrieve(cover_url, save_path)
-                    
-                    game["icon_path"] = save_path
-                    self.save_games()
-                    
-                    self.after(0, lambda: self.info_label.configure(text=f"✨ Обложка для '{game_name}' успешно загружена!", text_color="green"))
-                    self.after(0, self.update_list)
-                    self.after(50, lambda: self.select_game(game))
+                    with urllib.request.urlopen(req_grids) as resp_grids:
+                        grids_data = json.loads(resp_grids.read().decode())
+                        
+                    if grids_data and grids_data.get("success") and grids_data.get("data") and len(grids_data["data"]) > 0:
+                        cover_urls = []
+                        for item in grids_data["data"]:
+                            current_url = item.get("url", "")
+                            if any(current_url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
+                                cover_urls.append(current_url)
+                        
+                        if cover_urls:
+                            self.after(0, lambda: self.info_label.configure(text=f"✨ Найдено {len(cover_urls)} вариантов для '{found_name}'. Открываем окно выбора...", text_color="cyan"))
+                            self.after(0, lambda: self.create_cover_picker_window(game, cover_urls))
+                        else:
+                            self.after(0, lambda: self.info_label.configure(text=f"❌ На сервере нет статичных картинок для '{game_name}'.", text_color="red"))
+                    else:
+                        self.after(0, lambda: self.info_label.configure(text=f"❌ Для ID {sgdb_game_id} не найдено обложек.", text_color="red"))
                 else:
-                    self.after(0, lambda: self.info_label.configure(text=f"❌ Игра '{game_name}' не найдена в базе Steam.", text_color="red"))
+                    self.after(0, lambda: self.info_label.configure(text=f"❌ Игра '{game_name}' не найдена в базе SteamGridDB.", text_color="red"))
             except Exception as e:
-                self.after(0, lambda: self.info_label.configure(text=f"❌ Ошибка скачивания: {e}", text_color="red"))
+                self.after(0, lambda: self.info_label.configure(text=f"❌ Ошибка API: {e}", text_color="red"))
+                
+        threading.Thread(target=worker, daemon=True).start()
+
+    def create_cover_picker_window(self, game, cover_urls):
+        game_name = game["name"]
+        
+        picker_win = ctk.CTkToplevel(self)
+        picker_win.title(f"Выбор обложки: {game_name}")
+        picker_win.geometry("520x650")
+        picker_win.resizable(False, False)
+        picker_win.attributes("-topmost", True)
+
+        ctk.CTkLabel(picker_win, text=f"Выберите обложку для '{game_name}'", font=("Arial", 14, "bold")).pack(pady=10)
+        
+        status_lbl = ctk.CTkLabel(picker_win, text="Загрузка миниатюр...", text_color="gray")
+        status_lbl.pack(pady=(0, 10))
+
+        scroll_thumbs = ctk.CTkScrollableFrame(picker_win, width=500, height=500, fg_color="transparent")
+        scroll_thumbs.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.thumbs_cache = []
+
+        def load_thumbnails():
+            row, col = 0, 0
+            for url in cover_urls[:16]: 
+                try:
+                    img_req = urllib.request.Request(url, headers={
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    })
+                    
+                    with urllib.request.urlopen(img_req) as response:
+                        pil_raw = Image.open(response)
+                        pil_thumb = pil_raw.resize((100, 150), Image.Resampling.LANCZOS)
+                        ctk_thumb = ctk.CTkImage(light_image=pil_thumb, dark_image=pil_thumb, size=(100, 150))
+                        
+                        self.thumbs_cache.append(ctk_thumb)
+
+                        lbl_thumb = ctk.CTkLabel(scroll_thumbs, image=ctk_thumb, text="", cursor="hand2")
+                        lbl_thumb.grid(row=row, column=col, padx=10, pady=10)
+                        
+                        lbl_thumb.bind("<Button-1>", lambda e, u=url, w=picker_win, s=status_lbl, g=game: self.finish_download_selected_cover(g, u, w, s))
+
+                        col += 1
+                        if col > 3: 
+                            col = 0
+                            row += 1
+                except Exception as e:
+                    print(f"Ошибка миниатюры: {e}")
+            
+            self.after(0, lambda: status_lbl.configure(text="Кликните на постер для выбора", text_color="gray"))
+
+        threading.Thread(target=load_thumbnails, daemon=True).start()
+
+    def finish_download_selected_cover(self, game, cover_url, picker_win, status_lbl):
+        game_name = game["name"]
+        status_lbl.configure(text=f"🔄 Скачиваем оригинал...", text_color="cyan")
+        
+        def worker():
+            try:
+                clean_name = "".join([c for c in game_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+                save_path = os.path.join(self.covers_dir, f"{clean_name}_sgdb.jpg")
+                
+                # ИСПРАВЛЕНО: Перед сохранением новой картинки грохаем старую, чтобы сбросить жесткий кэш ОС
+                if os.path.exists(save_path):
+                    try: os.remove(save_path)
+                    except: pass
+                
+                img_req = urllib.request.Request(cover_url, headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                })
+                with urllib.request.urlopen(img_req) as response, open(save_path, 'wb') as out_file:
+                    out_file.write(response.read())
+                
+                game["icon_path"] = save_path
+                self.save_config()
+                
+                self.after(0, lambda: self.info_label.configure(text=f"✨ Обложка для '{game_name}' успешно изменена!", text_color="green"))
+                self.after(0, self.update_list)
+                self.after(50, lambda: self.select_game(game))
+                self.after(100, picker_win.destroy)
+                
+            except Exception as e:
+                self.after(0, lambda: status_lbl.configure(text=f"❌ Ошибка скачивания: {e}", text_color="red"))
                 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -472,6 +633,7 @@ StartupNotify=true
             
         if game["runner_type"] == "proton":
             env["STEAM_COMPAT_DATA_PATH"] = game.get("wineprefix") or os.path.join(os.path.dirname(game["exe_path"]), "prefix")
+            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = os.path.expanduser("~/.local/share/Steam")
             os.makedirs(env["STEAM_COMPAT_DATA_PATH"], exist_ok=True)
             cmd = [os.path.join(game["proton_path"], "proton"), "run", tool_name]
         else:
@@ -494,7 +656,7 @@ StartupNotify=true
         if custom_env_str:
             for pair in custom_env_str.split():
                 if "=" in pair:
-                    k, v = pair.split("=", 1)
+                    k, v = pair.split("...", 1) if "..." in pair else pair.split("=", 1)
                     env[k] = v
         
         cmd = []
@@ -503,7 +665,9 @@ StartupNotify=true
         if game.get("use_mangohud"): cmd += ["mangohud"]
         
         if game["runner_type"] == "proton":
+            # ИСПРАВЛЕНО: Добавлены критически важные переменные Стим-клиента, чтобы Proton/DWProton запускались без вылетов
             env["STEAM_COMPAT_DATA_PATH"] = game.get("wineprefix") or os.path.join(os.path.dirname(game["exe_path"]), "prefix")
+            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = os.path.expanduser("~/.local/share/Steam")
             os.makedirs(env["STEAM_COMPAT_DATA_PATH"], exist_ok=True)
             cmd += [os.path.join(game["proton_path"], "proton"), "run", game["exe_path"]]
         else:
@@ -516,7 +680,7 @@ StartupNotify=true
             
         subprocess.Popen(cmd, env=env, cwd=os.path.dirname(game["exe_path"]))
         game["launch_count"] = game.get("launch_count", 0) + 1
-        self.save_games(); self.select_game(game)
+        self.save_config(); self.select_game(game)
 
     def init_settings_screen(self):
         ctk.CTkLabel(self.settings_screen, text="Центр загрузки компонентов", font=("Arial", 16, "bold")).pack(pady=10)
