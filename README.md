@@ -35,3 +35,41 @@ To ensure everything runs smoothly, make sure you have the following installed o
 * Python libraries:
   ```bash
   pip install customtkinter Pillow
+
+    System utilities: tar (required for extracting downloaded components)
+
+    Gaming tools (Optional but highly recommended): wine, winetricks, gamemode, mangohud, gamescope
+
+🛠️ Installation & Usage
+
+    Clone the repository:
+
+Bash
+
+git clone [https://github.com/barsuk228332/vibe-launcher.git](https://github.com/barsuk228332/vibe-launcher.git)
+cd vibe-launcher
+
+    Install python dependencies:
+
+Bash
+
+pip install -r requirements.txt
+
+(Or install them manually using: pip install customtkinter Pillow)
+
+    Run the launcher:
+
+Bash
+
+python3 wine-gui.py
+
+On the very first launch, the app will automatically integrate itself into your system applications menu for quick access!
+📦 Project Structure
+
+If you want to contribute or tweak the paths, here is where the launcher stores its assets:
+
+    Config & Database: ~/.local/share/vibe-launcher/my_games.json
+
+    Downloaded Covers: ~/.local/share/vibe-launcher/covers/
+
+    Compatibility Layers: ~/.local/share/vibe-launcher/runners/
