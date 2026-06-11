@@ -1,115 +1,63 @@
-# 🎮 WINE Vibe Launcher
+WINE Vibe Launcher
 
-A lightweight, blazing-fast, and visually stunning custom launcher for WINE and Proton games on Linux. Built using `customtkinter`, it provides an elegant dark-themed dashboard to manage your Windows gaming library natively, without the overhead of heavy background game clients or stores.
+A lightweight, modern, and high-performance game launcher for Linux built with Python and CustomTkinter. Easily manage your Windows games (.exe) using system WINE, Proton, DXVK, and VKD3D components without bloating your system.
+✨ Features
 
-Designed from scratch for Linux enthusiasts and gamers who demand absolute performance, granular prefix control, and an interface that looks like a premium gaming client.
+    Clean System Integration: Installed locally for your user only (~/.local/bin), keeping your home directory perfectly clean.
 
----
+    Proton & WINE Support: Automatically scans and utilizes installed Proton layers (Steam, PortProton, etc.) or your system WINE.
 
-## ✨ Full Feature Overview
+    Component Downloader: Integrated download center for the latest releases of Proton-GE, DW Proton, DXVK, and VKD3D-Proton directly from repositories.
 
-* **🖼️ Smooth Grid View Library**: Say goodbye to boring text lists and basic dropdowns. Your game library is rendered as a clean, responsive grid of gaming cards featuring dynamic borders, highlight selections, and integrated visual indicators.
+    Built-in Linux Gaming Tweaks: Toggle performance optimizations inside a single integrated dashboard:
 
-* **🔍 Steam Cover Auto-Downloader**: No manual image hunting required. When you select a game, the launcher uses the Steam Store API to look up the game's official AppID and pulls down high-resolution vertical cover art directly into your local storage with one click.
+        MangoHud Overlay & Feral GameMode integration.
 
-* **⚙️ One-Click Wine Utilities**: Need to tweak libraries or install a font? The interface dynamically hooks into the environment variables of your selected game, allowing you to launch isolated instances of `Winecfg` and `Winetricks` targeted directly at that specific game's `WINEPREFIX`.
+        Gamescope micro-compositor configuration.
 
-* **🛠️ Native System Menu Integration**: Upon its very first execution, the launcher automatically compiles and deploys a standalone `.desktop` environment entry inside your user applications directory (`~/.local/share/applications`). This fully integrates Vibe Launcher into system application menus (KDE Kickoff, Rofi, GNOME, etc.) with proper categorization.
+        Esync/Fsync toggles for smooth frame rates.
 
-* **🌍 Dynamic Component Center**: An all-in-one hub to download and maintain compatibility translations. It fetches release manifests directly via the GitHub and Forgejo APIs, providing a visual download progress bar:
-  * **Proton-GE** (Official bleeding-edge optimization layers by GloriousEggroll)
-  * **DW Proton** (Custom wine-distributions fine-tuned for anime, gacha, and modern anti-cheat gaming layers via Dawn Winery API)
-  * **DXVK** (High-performance DirectX 9/10/11 to Vulkan translation)
-  * **VKD3D** (DirectX 12 to Vulkan translation layers)
+        Mesa GPL shader compilation tweak for AMD graphics (fixes stutters).
 
-* **🚀 Linux Gaming Performance Toggles**: Instantly stack the best open-source performance tools before spinning up your titles via simple checkboxes:
-  * **Feral GameMode**: Automatically forces CPU governors to performance mode, optimizes process scheduling niceness, and raises GPU power profiles.
-  * **MangoHud**: Displays full system telemetry, framing times, CPU/GPU utilization, temperatures, and live FPS counters.
-  * **Gamescope**: Runs the game inside an isolated micro-compositor instance, unlocking system-level AMD FSR upscaling, resolution forcing, and seamless refresh rate containerization.
+        LAA (Large Address Aware) anti-crash tweak for older 32-bit games.
 
-* **🔒 Strict Prefix Isolation & Custom Parameters**: Every single entry features independent arguments, separate system environment overrides (`ENV_VARIABLES`), and custom sandbox locations for individual `WINEPREFIX` virtual filesystems.
+    Automatic Artwork: Automatically fetches and caches high-quality game covers using the SteamGridDB API with an interactive in-app poster picker.
 
----
+    Playtime Tracker: Automatically monitors active game processes in a background thread and records your total pure playtime.
 
-## 🚀 Requirements & Dependencies
+    Safe Session Management: Ability to safely terminate hung or frozen game processes directly from the UI.
 
-To ensure all engines and visual elements load correctly, verify your Linux environment contains the following blocks:
+🛠️ Installation
 
-### 1. Base Runtime
-* **Python 3.10+** (Core programming runtime)
+You don't need root (sudo) privileges to install WINE Vibe Launcher. It installs entirely inside your user space.
 
-### 2. Python Packages
-* `customtkinter` (Modern UI elements)
-* `Pillow` (Advanced image processing for covers)
+    Clone the repository:
+    Bash
 
-### 3. System Packages & Tools
-Install these via your native package manager (e.g., `pacman -S`, `apt install`):
-* `wine` / `wine-staging` (Core execution layers)
-* `winetricks` (Windows DLL/font deployment engine)
-* `tar` (Required by the Component Manager to decompress downloaded layers)
-* `gamemode` / `lib32-gamemode` (For Feral GameMode support)
-* `mangohud` / `lib32-mangohud` (For overlay rendering)
-* `gamescope` (For the micro-compositor runtime environment)
+    git clone https://github.com/barsuk228332/vibe-launcher.git
+    cd vibe-launcher
 
----
+    Make the installer executable:
+    Bash
 
-## 🛠️ Installation & Usage Guide
+    chmod +x install.sh
 
-Follow these exact steps to deploy, install dependencies, and launch the application cleanly on your Linux system.
+    Run the installation script:
+    Bash
 
-### Step 1: Clone the Repository
-Open your terminal and clone the codebase down to your local directory:
+    ./install.sh
 
-```bash
-git clone [https://github.com/barsuk228332/vibe-launcher.git](https://github.com/barsuk228332/vibe-launcher.git)
-cd vibe-launcher
+The script will automatically install necessary Python dependencies (customtkinter, Pillow, requests), copy the binary to your executable path, and generate a native Linux .desktop shortcut.
+🚀 Usage
 
-Step 2: Install Python Dependencies
-
-Use pip to automatically install the required layout and image libraries specified in the project requirements:
+Once installed, you can launch the app directly from your system applications menu (search for WINE Vibe Launcher) or simply type in your terminal:
 Bash
 
-pip install -r requirements.txt
+vibe-launcher
 
-(Alternatively, you can install the packages manually if you don't use a requirements file):
-Bash
+🔒 Privacy & Security
 
-pip install customtkinter Pillow
+All your data, customized game configurations, and your SteamGridDB API token are safely stored locally in ~/.local/share/vibe-launcher/my_games.json. No personal data or private keys are ever uploaded to GitHub or any third-party servers.
+📄 License
 
-Step 3: Run the Launcher
-
-Execute the application Python script:
-Bash
-
-python3 wine-gui.py
-
-Note: On your very first startup, the app automatically creates its system desktop shortcut. You can then completely close the terminal and comfortably run WINE Vibe Launcher straight from your system desktop application grid or KDE application menu!
-📦 Project Structure & Storage Paths
-
-The launcher adheres to the XDG Base Directory Specification, keeping your user directories completely clean. All assets and configurations are isolated within your user space:
-Plaintext
-
-📁 Configuration Directory:  ~/.local/share/vibe-launcher/
-├── 📄 my_games.json         <- JSON database containing your custom game configurations
-├── 📁 covers/               <- Local caching directory for downloaded Steam cover art
-└── 📁 runners/              <- Extracted custom compatibility tools (Proton-GE, DW-Proton)
-    ├── 📁 dxvk/             <- Local folders storing explicit DXVK translator versions
-    └── 📁 vkd3d/            <- Local folders storing explicit VKD3D translator versions
-
-💡 How to Add and Run Your First Game
-
-    Launch the Client: Open Vibe Launcher from your applications panel.
-
-    Add Entry: Click on the + Добавить игру button at the top left.
-
-    Configure Paths:
-
-        Use Обзор файла to select your target game's .exe executable.
-
-        Provide a clean name for the library (e.g., Project Zomboid or Geometry Dash).
-
-        Leave the cover entry blank to use automatic search, or supply a custom path.
-
-    Choose Optimization: Toggle GameMode, MangoHud or Gamescope depending on your performance preferences.
-
-    Save & Play: Click СОХРАНИТЬ ИГРУ. Back on the home screen, select your newly created game card, click the blue Скачать обложку button to automatically fetch your artwork from Steam, and smash that green ИГРАТЬ button!
+This project is open-source. Feel free to fork, modify, and tweak it to fit your vibe!
