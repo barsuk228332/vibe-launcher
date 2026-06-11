@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import subprocess
 import json
@@ -11,6 +11,7 @@ import tarfile
 import sys
 import shlex
 import shutil
+import time
 from PIL import Image, ImageTk
 
 ctk.set_appearance_mode("dark")
@@ -44,16 +45,24 @@ class WineLauncher(ctk.CTk):
         self.config_data = self.load_config_data()
         self.games = self.config_data.get("games", [])
         
-        # ЗАШИТО НАМЕРТВО: Твой личный API Ключ для SteamGridDB
-        self.sgdb_key = "ee39063db1c8b61b1639601ebe95185d"
+        self.sgdb_key = self.config_data.get("sgdb_key", "")
 
         self.create_desktop_shortcut()
+
+        if "--headless-init" in sys.argv:
+            sys.exit(0)
 
         self.search_query = ""
         self.selected_game = None
         self.game_cards = []
         self.is_editing = False
         
+        self.current_process = None
+        self.is_game_running = False
+        
+        self.game_start_time = 0
+        self._resize_timer_id = None
+
         self.view_mode = "normal" 
 
         self.container = ctk.CTkFrame(self, fg_color="transparent")
@@ -77,16 +86,17 @@ class WineLauncher(ctk.CTk):
         shortcut_path = os.path.join(apps_dir, "vibe-launcher.desktop")
 
         if not os.path.exists(shortcut_path):
-            script_path = os.path.abspath(sys.argv[0])
-            working_dir = os.path.dirname(script_path)
-            python_exec = sys.executable
+            target_exec = os.path.expanduser("~/.local/bin/vibe-launcher")
+            if not os.path.exists(target_exec):
+                target_exec = f"{sys.executable} {os.path.abspath(sys.argv[0])}"
+            else:
+                target_exec = f"python3 {target_exec}"
 
             desktop_entry = f"""[Desktop Entry]
 Type=Application
 Name=WINE Vibe Launcher
 Comment=Управление WINE играми, Proton, DXVK и VKD3D
-Exec={python_exec} {script_path}
-Path={working_dir}
+Exec={target_exec}
 Icon=applications-games
 Terminal=false
 Categories=Game;Utility;
@@ -122,7 +132,7 @@ StartupNotify=true
         self.search_view_box = ctk.CTkFrame(self.main_screen, fg_color="transparent")
         self.search_view_box.pack(pady=(0, 10), fill="x")
 
-        self.search_entry = ctk.CTkEntry(self.search_view_box, placeholder_text="Поиск в библиотеке...")
+        self.search_entry = ctk.CTkEntry(self.search_view_box, placeholder_text="Поиск в библиотеке...", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.search_entry.pack(side="left", expand=True, fill="x", padx=(0, 10))
         self.search_entry.bind("<KeyRelease>", self.filter_games)
 
@@ -135,7 +145,7 @@ StartupNotify=true
         self.scroll_frame = ctk.CTkScrollableFrame(self.main_screen, label_text="ВАША ИГРОВАЯ БИБЛИОТЕКА", label_font=("Arial", 11, "bold"))
         self.scroll_frame.pack(fill="both", expand=True, pady=5)
 
-        self.info_panel = ctk.CTkFrame(self.main_screen, fg_color="#1e1e1e", border_width=1, border_color="#333", height=165)
+        self.info_panel = ctk.CTkFrame(self.main_screen, fg_color="#1e1e24", border_width=1, border_color="#333", height=165)
         self.info_panel.pack(fill="x", pady=10)
         self.info_panel.pack_propagate(False)
         
@@ -162,7 +172,7 @@ StartupNotify=true
         self.edit_btn = ctk.CTkButton(self.main_btn_box, text="ИЗМЕНИТЬ", command=self.open_edit_existing, fg_color="#444", hover_color="#555", width=110, height=45)
         self.edit_btn.pack(side="left", padx=5)
 
-        self.run_btn = ctk.CTkButton(self.main_btn_box, text="ИГРАТЬ", command=self.run_game, fg_color="#28a745", hover_color="#218838", font=("Arial", 15, "bold"), height=45)
+        self.run_btn = ctk.CTkButton(self.main_btn_box, text="ИГРАТЬ", command=self.handle_game_button, fg_color="#28a745", hover_color="#218838", font=("Arial", 15, "bold"), height=45)
         self.run_btn.pack(side="right", fill="x", expand=True, padx=(5, 0))
 
         self.update_list()
@@ -179,9 +189,13 @@ StartupNotify=true
 
     def on_window_resize(self, event):
         if hasattr(self, 'scroll_frame') and event.widget == self:
-            if not hasattr(self, '_resize_timer') or not self._resize_timer.is_alive():
-                self._resize_timer = threading.Timer(0.2, self.update_list)
-                self._resize_timer.start()
+            if self._resize_timer_id is not None:
+                self.after_cancel(self._resize_timer_id)
+            self._resize_timer_id = self.after(200, self.safe_update_list)
+
+    def safe_update_list(self):
+        self._resize_timer_id = None
+        self.update_list()
 
     def open_add_new(self):
         self.is_editing = False
@@ -221,6 +235,10 @@ StartupNotify=true
         self.gamescope_var.set(game.get("use_gamescope", False))
         self.gamemode_var.set(game.get("use_gamemode", False))
         
+        self.esync_var.set(game.get("use_esync", True))
+        self.gpl_var.set(game.get("use_gpl", False))
+        self.large_address_var.set(game.get("use_large_address", True))
+        
         self.show_screen(self.add_screen)
 
     def scan_runners(self):
@@ -253,21 +271,21 @@ StartupNotify=true
     def init_add_screen(self):
         ctk.CTkLabel(self.add_screen, text="Параметры игры", font=("Arial", 16, "bold")).pack(pady=(0, 10))
         
-        self.exe_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Путь к исполняемому файлу (.exe)...")
+        self.exe_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Путь к исполняемому файлу (.exe)...", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.exe_entry.pack(fill="x", pady=2)
         ctk.CTkButton(self.add_screen, text="Обзор файла", height=25, fg_color="#444", command=self.choose_exe).pack(anchor="e", pady=(0, 5))
         
-        self.name_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Название игры в библиотеке...")
+        self.name_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Название игры в библиотеке...", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.name_entry.pack(fill="x", pady=(2, 5))
 
-        self.icon_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Путь к обложке игры (Оставьте пустым для автопоиска)...")
+        self.icon_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Путь к обложке игры (Оставьте пустым для автопоиска)...", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.icon_entry.pack(fill="x", pady=2)
         ctk.CTkButton(self.add_screen, text="Выбрать обложку вручную", height=25, fg_color="#444", command=self.choose_icon).pack(anchor="e", pady=(0, 5))
         
-        self.args_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Аргументы запуска (например: -skipintro -windowed)")
+        self.args_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Аргументы запуска (например: -skipintro -windowed)", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.args_entry.pack(fill="x", pady=2)
         
-        self.env_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Переменные окружения (например: DXVK_HUD=1 WINEESYNC=1)")
+        self.env_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Переменные окружения (например: DXVK_HUD=1 WINEESYNC=1)", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.env_entry.pack(fill="x", pady=(2, 5))
 
         self.runner_dropdown = ctk.CTkOptionMenu(self.add_screen, values=["Системный WINE"], command=self.on_runner_changed)
@@ -275,10 +293,10 @@ StartupNotify=true
         
         self.proton_frame = ctk.CTkFrame(self.add_screen, fg_color="transparent")
         self.proton_frame.pack(fill="x", pady=2)
-        self.proton_entry = ctk.CTkEntry(self.proton_frame, placeholder_text="Путь к Proton слою...")
+        self.proton_entry = ctk.CTkEntry(self.proton_frame, placeholder_text="Путь к Proton слою...", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.proton_entry.pack(fill="x", side="left", expand=True, padx=(0, 5))
         
-        self.prefix_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Кастомный путь к префиксу (WINEPREFIX)...")
+        self.prefix_entry = ctk.CTkEntry(self.add_screen, placeholder_text="Кастомный путь к префиксу (WINEPREFIX)...", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
         self.prefix_entry.pack(fill="x", pady=2)
         
         lib_box = ctk.CTkFrame(self.add_screen, fg_color="transparent")
@@ -288,17 +306,38 @@ StartupNotify=true
         self.vkd3d_dropdown = ctk.CTkOptionMenu(lib_box, values=["[ Отключено ]"])
         self.vkd3d_dropdown.pack(side="right", expand=True, fill="x", padx=(5, 0))
 
-        opt_box = ctk.CTkFrame(self.add_screen, fg_color="transparent")
-        opt_box.pack(fill="x", pady=10)
+        tweak_box = ctk.CTkFrame(self.add_screen, fg_color="#1a1a1a", border_width=1, border_color="#333", corner_radius=6)
+        tweak_box.pack(fill="x", pady=10, padx=2)
         
+        ctk.CTkLabel(tweak_box, text="⚙️ Встроенные твики и утилиты оптимизации Linux Gaming:", font=("Arial", 11, "bold"), text_color="#1f538d").pack(anchor="w", padx=12, pady=(8, 4))
+        
+        tweak_grid = ctk.CTkFrame(tweak_box, fg_color="transparent")
+        tweak_grid.pack(fill="x", padx=10, pady=(0, 10))
+        
+        tweak_grid.grid_columnconfigure(0, weight=1)
+        tweak_grid.grid_columnconfigure(1, weight=1)
+        tweak_grid.grid_columnconfigure(2, weight=1)
+
+        # ИСПРАВЛЕНО: Текст чекбоксов слегка укорочен, а размер шрифта уменьшен до 11, чтобы он идеально сидел без ресайза
+        tweak_font = ("Arial", 11)
+
         self.mangohud_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_box, text="MangoHud Overlay", variable=self.mangohud_var).pack(side="left", padx=15)
+        ctk.CTkCheckBox(tweak_grid, text="MangoHud Overlay", font=tweak_font, variable=self.mangohud_var).grid(row=0, column=0, padx=8, pady=6, sticky="w")
         
         self.gamescope_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_box, text="Gamescope", variable=self.gamescope_var).pack(side="left", padx=15)
+        ctk.CTkCheckBox(tweak_grid, text="Gamescope", font=tweak_font, variable=self.gamescope_var).grid(row=0, column=1, padx=8, pady=6, sticky="w")
 
         self.gamemode_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_box, text="Feral GameMode", variable=self.gamemode_var).pack(side="left", padx=15)
+        ctk.CTkCheckBox(tweak_grid, text="Feral GameMode", font=tweak_font, variable=self.gamemode_var).grid(row=0, column=2, padx=8, pady=6, sticky="w")
+
+        self.esync_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(tweak_grid, text="Esync/Fsync твик", font=tweak_font, variable=self.esync_var).grid(row=1, column=0, padx=8, pady=6, sticky="w")
+
+        self.gpl_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(tweak_grid, text="Mesa GPL (AMD)", font=tweak_font, variable=self.gpl_var).grid(row=1, column=1, padx=8, pady=6, sticky="w")
+
+        self.large_address_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(tweak_grid, text="LAA анти-краш", font=tweak_font, variable=self.large_address_var).grid(row=1, column=2, padx=8, pady=6, sticky="w")
 
         btn_box = ctk.CTkFrame(self.add_screen, fg_color="transparent")
         btn_box.pack(fill="x", side="bottom", pady=5)
@@ -344,6 +383,7 @@ StartupNotify=true
         for e in [self.exe_entry, self.name_entry, self.prefix_entry, self.args_entry, self.env_entry, self.icon_entry]: 
             e.delete(0, tk.END)
         self.mangohud_var.set(False); self.gamescope_var.set(False); self.gamemode_var.set(False)
+        self.esync_var.set(True); self.gpl_var.set(False); self.large_address_var.set(True)
 
     def save_new_game(self):
         exe = self.exe_entry.get().strip(); name = self.name_entry.get().strip()
@@ -364,7 +404,11 @@ StartupNotify=true
             "use_mangohud": self.mangohud_var.get(),
             "use_gamescope": self.gamescope_var.get(),
             "use_gamemode": self.gamemode_var.get(),
-            "launch_count": self.selected_game["launch_count"] if self.is_editing else 0
+            "use_esync": self.esync_var.get(),
+            "use_gpl": self.gpl_var.get(),
+            "use_large_address": self.large_address_var.get(),
+            "launch_count": self.selected_game["launch_count"] if self.is_editing else 0,
+            "total_playtime_seconds": self.selected_game.get("total_playtime_seconds", 0) if self.is_editing else 0
         }
 
         if self.is_editing:
@@ -429,7 +473,6 @@ StartupNotify=true
                 
                 if img_path and os.path.exists(img_path):
                     try:
-                        # ИСПРАВЛЕНО: Принудительно открываем файл заново, игнорируя кэш Tkinter/Pillow
                         with Image.open(img_path) as open_img:
                             pil_img = open_img.copy().resize((img_w, img_h), Image.Resampling.LANCZOS)
                         ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(img_w, img_h))
@@ -463,6 +506,15 @@ StartupNotify=true
         self.search_query = self.search_entry.get()
         self.update_list()
 
+    def format_playtime(self, total_seconds):
+        if not total_seconds:
+            return "0 мин."
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        if hours > 0:
+            return f"{hours} ч. {minutes} мин."
+        return f"{minutes} мин."
+
     def select_game(self, game):
         self.selected_game = game
         
@@ -472,6 +524,8 @@ StartupNotify=true
             else:
                 card.configure(border_color="#333", fg_color="#1a1a1a")
                 
+        time_text = self.format_playtime(game.get("total_playtime_seconds", 0))
+
         info = f"Игра: {game.get('name')}\n"
         info += f"Раннер: {game.get('runner_type','wine').upper()} | Префикс: {game.get('wineprefix') or 'Default'}\n"
         info += f"Трансляторы: DXVK: {game.get('dxvk_version','None')} | VKD3D: {game.get('vkd3d_version','None')}\n"
@@ -479,12 +533,25 @@ StartupNotify=true
         if game.get('use_gamemode'): opts.append("GameMode")
         if game.get('use_gamescope'): opts.append("Gamescope")
         if game.get('use_mangohud'): opts.append("MangoHud")
-        info += f"Оптимизации: {', '.join(opts) if opts else 'Нет'} | Запусков: {game.get('launch_count',0)}"
+        if game.get('use_esync', True): opts.append("Esync")
+        if game.get('use_gpl', False): opts.append("MesaGPL")
+        
+        info += f"Оптимизации: {', '.join(opts) if opts else 'Нет'}\n"
+        info += f"Запусков: {game.get('launch_count',0)} | Время в игре: {time_text}"
         self.info_label.configure(text=info, text_color="white")
+
+        if self.is_game_running:
+            self.run_btn.configure(text="ЗАКРЫТЬ ИГРУ", fg_color="#af2331", hover_color="#721c24")
+        else:
+            self.run_btn.configure(text="ИГРАТЬ", fg_color="#28a745", hover_color="#218838")
 
     def download_cover_auto(self):
         if not self.selected_game:
             self.info_label.configure(text="⚠️ Сначала выберите игру для скачивания обложки!", text_color="#ff4444")
+            return
+
+        if not self.sgdb_key:
+            self.info_label.configure(text="⚠️ Ошибка: SteamGridDB API Key не задан в Настройках!", text_color="#ff4444")
             return
 
         game = self.selected_game
@@ -599,7 +666,6 @@ StartupNotify=true
                 clean_name = "".join([c for c in game_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
                 save_path = os.path.join(self.covers_dir, f"{clean_name}_sgdb.jpg")
                 
-                # ИСПРАВЛЕНО: Перед сохранением новой картинки грохаем старую, чтобы сбросить жесткий кэш ОС
                 if os.path.exists(save_path):
                     try: os.remove(save_path)
                     except: pass
@@ -641,6 +707,12 @@ StartupNotify=true
             
         subprocess.Popen(cmd, env=env)
 
+    def handle_game_button(self):
+        if self.is_game_running:
+            self.stop_game()
+        else:
+            self.run_game()
+
     def run_game(self):
         if not self.selected_game: return
         game = self.selected_game; env = os.environ.copy(); ld_paths = []
@@ -659,13 +731,20 @@ StartupNotify=true
                     k, v = pair.split("...", 1) if "..." in pair else pair.split("=", 1)
                     env[k] = v
         
+        if game.get("use_esync", True):
+            env["WINEESYNC"] = "1"
+            env["WINEFSYNC"] = "1"
+        if game.get("use_gpl", False):
+            env["RADV_PERFTEST"] = "gpl"
+        if game.get("use_large_address", True):
+            env["WINE_LARGE_ADDRESS_AWARE"] = "1"
+
         cmd = []
         if game.get("use_gamemode"): cmd += ["gamemoderun"]
         if game.get("use_gamescope"): cmd += ["gamescope", "-f", "-F", "fsr", "--"]
         if game.get("use_mangohud"): cmd += ["mangohud"]
         
         if game["runner_type"] == "proton":
-            # ИСПРАВЛЕНО: Добавлены критически важные переменные Стим-клиента, чтобы Proton/DWProton запускались без вылетов
             env["STEAM_COMPAT_DATA_PATH"] = game.get("wineprefix") or os.path.join(os.path.dirname(game["exe_path"]), "prefix")
             env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = os.path.expanduser("~/.local/share/Steam")
             os.makedirs(env["STEAM_COMPAT_DATA_PATH"], exist_ok=True)
@@ -678,9 +757,60 @@ StartupNotify=true
         if args_str:
             cmd += shlex.split(args_str)
             
-        subprocess.Popen(cmd, env=env, cwd=os.path.dirname(game["exe_path"]))
-        game["launch_count"] = game.get("launch_count", 0) + 1
-        self.save_config(); self.select_game(game)
+        try:
+            self.game_start_time = time.time()
+            
+            self.current_process = subprocess.Popen(cmd, env=env, cwd=os.path.dirname(game["exe_path"]))
+            self.is_game_running = True
+            
+            self.run_btn.configure(text="ЗАКРЫТЬ ИГРУ", fg_color="#af2331", hover_color="#721c24")
+            
+            threading.Thread(target=self.monitor_game_process, daemon=True).start()
+            
+            game["launch_count"] = game.get("launch_count", 0) + 1
+            self.save_config(); self.select_game(game)
+        except Exception as e:
+            messagebox.showerror("WINE Vibe Launcher", f"Не удалось запустить игру:\n{e}")
+
+    def monitor_game_process(self):
+        if self.current_process:
+            self.current_process.wait()
+            
+            if self.is_game_running and self.game_start_time > 0:
+                elapsed_seconds = int(time.time() - self.game_start_time)
+                if self.selected_game:
+                    old_playtime = self.selected_game.get("total_playtime_seconds", 0)
+                    self.selected_game["total_playtime_seconds"] = old_playtime + elapsed_seconds
+                    self.save_config()
+
+            self.is_game_running = False
+            self.current_process = None
+            self.game_start_time = 0
+            self.after(0, self.reset_game_button)
+
+    def stop_game(self):
+        if self.current_process and self.is_game_running:
+            if messagebox.askyesno("WINE Vibe Launcher", "Вы действительно хотите принудительно завершить игру?"):
+                try:
+                    if self.game_start_time > 0:
+                        elapsed_seconds = int(time.time() - self.game_start_time)
+                        if self.selected_game:
+                            old_playtime = self.selected_game.get("total_playtime_seconds", 0)
+                            self.selected_game["total_playtime_seconds"] = old_playtime + elapsed_seconds
+                            self.save_config()
+
+                    self.current_process.terminate()
+                    self.is_game_running = False
+                    self.current_process = None
+                    self.game_start_time = 0
+                    self.reset_game_button()
+                except Exception as e:
+                    print(f"Не удалось остановить процесс: {e}")
+
+    def reset_game_button(self):
+        self.run_btn.configure(text="ИГРАТЬ", fg_color="#28a745", hover_color="#218838")
+        if self.selected_game:
+            self.select_game(self.selected_game)
 
     def init_settings_screen(self):
         ctk.CTkLabel(self.settings_screen, text="Центр загрузки компонентов", font=("Arial", 16, "bold")).pack(pady=10)
@@ -707,7 +837,26 @@ StartupNotify=true
             scroll = ctk.CTkScrollableFrame(tab, height=240); scroll.pack(fill="x", pady=5)
             ctk.CTkButton(tab, text=f"Обновить список релизов", font=("Arial", 12, "bold"), fg_color="#333", hover_color="#444", command=lambda c=conf, s=scroll, k=key: self.load_data_thread(c, s, k)).pack(fill="x", pady=5)
             
+        api_box = ctk.CTkFrame(self.settings_screen, fg_color="#1a1a1a", border_width=1, border_color="#333", corner_radius=6)
+        api_box.pack(fill="x", pady=10, padx=5)
+        
+        ctk.CTkLabel(api_box, text="SteamGridDB API Key:", font=("Arial", 11, "bold")).pack(side="left", padx=10, pady=10)
+        
+        self.api_entry = ctk.CTkEntry(api_box, placeholder_text="Вставьте токен...", show="*", text_color=("#ffffff", "#ffffff"), placeholder_text_color="#aaaaaa")
+        self.api_entry.pack(side="left", fill="x", expand=True, padx=5, pady=10)
+        if self.sgdb_key:
+            self.api_entry.insert(0, self.sgdb_key)
+            
+        save_api_btn = ctk.CTkButton(api_box, text="Сохранить ключ", width=110, fg_color="#1f538d", hover_color="#296cb8", command=self.save_api_key_local)
+        save_api_btn.pack(side="right", padx=10, pady=10)
+
         ctk.CTkButton(self.settings_screen, text="ВЕРНУТЬСЯ В ГЛАВНОЕ МЕНЮ", fg_color="#444", hover_color="#555", command=lambda: self.show_screen(self.main_screen)).pack(fill="x", side="bottom", pady=10)
+
+    def save_api_key_local(self):
+        new_key = self.api_entry.get().strip()
+        self.sgdb_key = new_key
+        self.save_config()
+        messagebox.showinfo("WINE Vibe Launcher", "API-ключ SteamGridDB успешно сохранен!")
 
     def load_data_thread(self, conf, scroll, component_type):
         def worker():
